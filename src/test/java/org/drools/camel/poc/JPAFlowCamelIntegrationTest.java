@@ -22,31 +22,37 @@ import org.drools.command.impl.GenericCommand;
 import org.drools.command.runtime.process.SignalEventCommand;
 import org.drools.command.runtime.process.StartProcessCommand;
 import org.drools.common.AbstractRuleBase;
+import org.drools.compiler.ProcessBuilderFactory;
 import org.drools.grid.GridNode;
 import org.drools.grid.impl.GridImpl;
 import org.drools.grid.service.directory.WhitePages;
 import org.drools.grid.service.directory.impl.WhitePagesImpl;
 import org.drools.impl.InternalKnowledgeBase;
+import org.drools.marshalling.impl.ProcessMarshallerFactory;
 import org.drools.persistence.jpa.JPAKnowledgeService;
-import org.drools.process.core.event.EventTypeFilter;
-import org.drools.process.instance.impl.Action;
-import org.drools.ruleflow.core.RuleFlowProcess;
-import org.drools.ruleflow.instance.RuleFlowProcessInstance;
 import org.drools.runtime.Environment;
 import org.drools.runtime.EnvironmentName;
 import org.drools.runtime.ExecutionResults;
 import org.drools.runtime.StatefulKnowledgeSession;
+import org.drools.runtime.process.ProcessContext;
 import org.drools.runtime.process.ProcessInstance;
-import org.drools.spi.ProcessContext;
-import org.drools.workflow.core.Node;
-import org.drools.workflow.core.impl.ConnectionImpl;
-import org.drools.workflow.core.impl.DroolsConsequenceAction;
-import org.drools.workflow.core.node.ActionNode;
-import org.drools.workflow.core.node.EndNode;
-import org.drools.workflow.core.node.EventNode;
-import org.drools.workflow.core.node.StartNode;
+import org.drools.runtime.process.ProcessRuntimeFactory;
 import org.h2.tools.DeleteDbFiles;
 import org.h2.tools.Server;
+import org.jbpm.marshalling.impl.ProcessMarshallerFactoryServiceImpl;
+import org.jbpm.process.builder.ProcessBuilderFactoryServiceImpl;
+import org.jbpm.process.core.event.EventTypeFilter;
+import org.jbpm.process.instance.ProcessRuntimeFactoryServiceImpl;
+import org.jbpm.process.instance.impl.Action;
+import org.jbpm.ruleflow.core.RuleFlowProcess;
+import org.jbpm.ruleflow.instance.RuleFlowProcessInstance;
+import org.jbpm.workflow.core.Node;
+import org.jbpm.workflow.core.impl.ConnectionImpl;
+import org.jbpm.workflow.core.impl.DroolsConsequenceAction;
+import org.jbpm.workflow.core.node.ActionNode;
+import org.jbpm.workflow.core.node.EndNode;
+import org.jbpm.workflow.core.node.EventNode;
+import org.jbpm.workflow.core.node.StartNode;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Assert;
@@ -66,6 +72,9 @@ public class JPAFlowCamelIntegrationTest {
 
     @BeforeClass
     public static void startH2Database(){
+        ProcessBuilderFactory.setProcessBuilderFactoryService(new ProcessBuilderFactoryServiceImpl());
+        ProcessMarshallerFactory.setProcessMarshallerFactoryService(new ProcessMarshallerFactoryServiceImpl());
+        ProcessRuntimeFactory.setProcessRuntimeFactoryService(new ProcessRuntimeFactoryServiceImpl());
         try {
             DeleteDbFiles.execute("", "JPADroolsFlow", true);
             h2Server = Server.createTcpServer(new String[0]);
@@ -111,18 +120,19 @@ public class JPAFlowCamelIntegrationTest {
 
     @Test
     public void multipleProcessWithSignalEvent() {
+        
         String processId = "signalProcessTest";
         String eventType = "myEvent";
         RuleFlowProcess process = newSimpleEventProcess(processId, eventType);
-
+        
         KnowledgeBase kbase = KnowledgeBaseFactory.newKnowledgeBase();
         ((AbstractRuleBase) ((InternalKnowledgeBase) kbase).getRuleBase()).addProcess(process);
 
         StatefulKnowledgeSession ksession = JPAKnowledgeService.newStatefulKnowledgeSession(kbase, null, createEnvironment());
-        RuleFlowProcessInstance processInstance1 = (RuleFlowProcessInstance) ksession.startProcess(processId);
+        ProcessInstance processInstance1 = ksession.startProcess(processId);
         long processInstance1Id = processInstance1.getId();
         Assert.assertEquals(ProcessInstance.STATE_ACTIVE, processInstance1.getState());
-        RuleFlowProcessInstance processInstance2 = (RuleFlowProcessInstance) ksession.startProcess(processId);
+        ProcessInstance processInstance2 = ksession.startProcess(processId);
         long processInstance2Id = processInstance2.getId();
         Assert.assertEquals(ProcessInstance.STATE_ACTIVE, processInstance2.getState());
 
@@ -144,12 +154,14 @@ public class JPAFlowCamelIntegrationTest {
 
         KnowledgeBase kbase = KnowledgeBaseFactory.newKnowledgeBase();
         ((AbstractRuleBase) ((InternalKnowledgeBase) kbase).getRuleBase()).addProcess(newProcessWithScriptTask(processId, new Action() {
+            
             @Override
             public void execute(ProcessContext context) throws Exception {
                 System.out.println("Script task node executed");
+                
             }
         }));
-
+        
         StatefulKnowledgeSession ksession = kbase.newStatefulKnowledgeSession();
 
         Context context = configureGridContext(ksession);
@@ -278,7 +290,7 @@ public class JPAFlowCamelIntegrationTest {
         camelContext.addRoutes(rb);
         camelContext.start();
 
-        StartProcessCommand startProcessCommand = new StartProcessCommand(processId);
+        StartProcessCommand startProcessCommand = new StartProcessCommand(processId, "processInstanceID");
         List<GenericCommand<?>> commands = new ArrayList<GenericCommand<?>>();
         commands.add(startProcessCommand);
         BatchExecutionCommand batchExecutionCommand = CommandFactory.newBatchExecution(commands, "ksession1");
@@ -286,6 +298,7 @@ public class JPAFlowCamelIntegrationTest {
         ProducerTemplate template = camelContext.createProducerTemplate();
         ExecutionResults response = (ExecutionResults) template.requestBody("direct:test-with-session", batchExecutionCommand);
         Assert.assertNotNull(response);
+        Assert.assertNotNull(response.getValue("processInstanceID"));
     }
 
     private RuleFlowProcess newSimpleEventProcess(String processId, String eventType) {
